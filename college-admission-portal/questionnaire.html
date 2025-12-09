@@ -1,0 +1,78 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Program Recommender</title>
+    <style>
+        body { font-family: sans-serif; padding: 40px; background: #f4f4f4; }
+        .container { background: white; padding: 30px; border-radius: 8px; max-width: 600px; margin: 0 auto; }
+        .form-group { margin-bottom: 20px; }
+        label { display: block; font-weight: bold; margin-bottom: 5px; }
+        select, input[type="text"] { width: 100%; padding: 10px; }
+        button { background: #007bff; color: white; padding: 12px 24px; border: none; cursor: pointer; width: 100%; font-size: 16px; }
+        button:hover { background: #0056b3; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>Help Me Choose</h1>
+    <p>Answer a few questions and our AI will match you with the best programs.</p>
+
+    <form action="recommend.php" method="POST">
+        <input type="hidden" name="student_strand" id="studentStrandInput" value="">
+
+        <div class="form-group">
+            <label>1. How do you prefer to work?</label>
+            <select name="work_style" required>
+                <option value="">Select your preference</option>
+                <option value="analytical">I enjoy analyzing data, numbers, and solving complex problems (STEM/Research)</option>
+                <option value="creative">I like designing, creating, and expressing ideas (Arts/Design/Architecture)</option>
+                <option value="practical">I prefer hands-on work, building, and technical skills (Engineering Technology)</option>
+                <option value="theoretical">I like studying theories, concepts, and advanced mathematics (Pure Engineering)</option>
+                <option value="social">I want to help people and work with communities (Health/Education/Social Services)</option>
+                <option value="business">I enjoy managing, organizing, and business strategies (Business/Accountancy)</option>
+                <option value="digital">I like coding, programming, and working with technology (IT/Computer Science)</option>
+                <option value="leadership">I want to teach, guide, and develop others (Education/Training)</option>
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label>2. What specific topic interests you most?</label>
+            <select name="topic_interest" required>
+                <option value="">Select your interest</option>
+                <option value="business_finance">Business, Finance, Accounting, or Entrepreneurship</option>
+                <option value="engineering">Engineering, Construction, or Infrastructure</option>
+                <option value="technology">Computers, Software, or Information Technology</option>
+                <option value="health_medical">Health, Medicine, Nursing, or Nutrition</option>
+                <option value="education">Teaching, Education, or Child Development</option>
+                <option value="arts_design">Arts, Design, Architecture, or Visual Communication</option>
+                <option value="science_research">Science, Research, Biology, or Chemistry</option>
+                <option value="social_humanities">Psychology, Communication, or Social Sciences</option>
+                <option value="environment_agriculture">Agriculture, Forestry, or Environmental Science</option>
+                <option value="law_criminology">Law, Criminology, or Public Safety</option>
+                <option value="hospitality_tourism">Hospitality, Tourism, or Service Industry</option>
+                <option value="mathematics">Mathematics, Statistics, or Data Analysis</option>
+                <option value="sports_fitness">Sports, Physical Education, or Fitness</option>
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label>3. In one short sentence, what is your dream job?</label>
+            <input type="text" name="dream_job" placeholder="e.g., I want to design eco-friendly houses." required>
+        </div>
+
+        <button type="submit">Find My Program</button>
+    </form>
+</div>
+
+<script>
+    // Load student's strand from localStorage
+    document.addEventListener('DOMContentLoaded', function() {
+        const studentStrand = localStorage.getItem('selected_strand') || 
+                             localStorage.getItem('edu-strand') || 'gas';
+        document.getElementById('studentStrandInput').value = studentStrand;
+        console.log('Student strand loaded:', studentStrand);
+    });
+</script>
+</body>
+</html>
