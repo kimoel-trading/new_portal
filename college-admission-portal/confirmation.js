@@ -108,19 +108,26 @@ steps.forEach((step, index) => {
     step.classList.add("active");
   }
 
-  // UNLOCKED steps
+  // Flexible navigation: can go back to completed pages, but can't skip ahead
   if (index <= maxUnlockedStep) {
     step.classList.add("unlocked");
     step.style.cursor = "pointer";
+    step.style.opacity = "1";
 
     // avoid blocking clicks
     step.querySelectorAll("*").forEach(el => el.style.pointerEvents = "none");
 
-    // click → navigate + save progress
+    // click → navigate (flexible: can go back to completed pages)
     step.addEventListener("click", () => {
-      localStorage.setItem("maxUnlockedStep", Math.max(maxUnlockedStep, index));
+      // Flexible navigation: can go back to completed pages, but can't skip ahead
+      if (index > maxUnlockedStep + 1) return; // Can't go more than one step ahead
+
       window.location.href = pageMap[index];
     });
+  } else {
+    step.classList.remove("unlocked");
+    step.style.cursor = "default";
+    step.style.opacity = "0.5";
   }
 });
 

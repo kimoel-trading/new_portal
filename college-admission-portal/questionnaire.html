@@ -15,10 +15,10 @@
 </head>
 <body>
 <div class="container">
-    <h1>Help Me Choose</h1>
-    <p>Answer a few questions and our AI will match you with the best programs.</p>
+    <h1>🤖 AI Program Recommender</h1>
+    <p>Answer a few questions and our Gemini AI will match you with the best programs based on your preferences and interests.</p>
 
-    <form action="recommend.php" method="POST">
+    <form action="process_recommendations.php" method="POST">
         <input type="hidden" name="student_strand" id="studentStrandInput" value="">
 
         <div class="form-group">
@@ -68,10 +68,133 @@
 <script>
     // Load student's strand from localStorage
     document.addEventListener('DOMContentLoaded', function() {
-        const studentStrand = localStorage.getItem('selected_strand') || 
+        const studentStrand = localStorage.getItem('selected_strand') ||
                              localStorage.getItem('edu-strand') || 'gas';
         document.getElementById('studentStrandInput').value = studentStrand;
         console.log('Student strand loaded:', studentStrand);
+
+        // Check for error parameters in URL
+        const urlParams = new URLSearchParams(window.location.search);
+        const error = urlParams.get('error');
+        const strand = urlParams.get('strand');
+
+        if (error === 'strand_mismatch' && strand) {
+            // Show error message for strand mismatch
+            const errorDiv = document.createElement('div');
+            errorDiv.style.cssText = `
+                background: #fee2e2;
+                border: 1px solid #fecaca;
+                color: #dc2626;
+                padding: 15px;
+                border-radius: 8px;
+                margin-bottom: 20px;
+                text-align: center;
+                font-weight: 500;
+            `;
+            errorDiv.innerHTML = `
+                <strong>❌ Strand Mismatch</strong><br>
+                Sorry, your interests don't match with the <strong>${strand.toUpperCase()}</strong> strand you have taken.<br>
+                Please reconsider your answers or contact your academic advisor.
+            `;
+
+            // Insert error message at the top of the form
+            const form = document.querySelector('form');
+            form.insertBefore(errorDiv, form.firstChild);
+
+            // Scroll to top to show error
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+
+            // Clear URL parameters after showing error
+            setTimeout(() => {
+                const newUrl = window.location.pathname;
+                window.history.replaceState({}, document.title, newUrl);
+            }, 1000);
+        } else if (error === 'arts_strand_mismatch' && strand) {
+            // Show specific error message for arts interests with incompatible strands
+            const errorDiv = document.createElement('div');
+            errorDiv.style.cssText = `
+                background: #fee2e2;
+                border: 1px solid #fecaca;
+                color: #dc2626;
+                padding: 15px;
+                border-radius: 8px;
+                margin-bottom: 20px;
+                text-align: center;
+                font-weight: 500;
+            `;
+            errorDiv.innerHTML = `
+                <strong>🎨 Arts/Design Interest Not Compatible</strong><br>
+                Architecture and Design programs (like <strong>BS Architecture</strong>, <strong>BS Interior Design</strong>) are <strong>STEM-exclusive</strong>.<br>
+                As a <strong>${strand.toUpperCase()}</strong> student, you cannot pursue arts/design programs at this university.<br><br>
+                <strong>Suggestion:</strong> Consider Communication, Business, or Education programs that match your creative interests.
+            `;
+
+            // Insert error message at the top of the form
+            const form = document.querySelector('form');
+            form.insertBefore(errorDiv, form.firstChild);
+
+            // Scroll to top to show error
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+
+            // Clear URL parameters after showing error
+            setTimeout(() => {
+                const newUrl = window.location.pathname;
+                window.history.replaceState({}, document.title, newUrl);
+            }, 2000);
+        } else if ((error === 'stem_strand_mismatch' || error === 'abm_strand_mismatch' || error === 'humss_strand_mismatch') && strand) {
+            // Show comprehensive error message for any strand incompatibility
+            const exclusiveStrand = urlParams.get('exclusive') || 'STEM';
+            const programs = urlParams.get('programs') || 'specialized programs';
+
+            let emoji = '🔬';
+            let title = 'Interest Not Compatible';
+            let suggestion = '';
+
+            if (error === 'stem_strand_mismatch') {
+                emoji = '🔬';
+                title = 'STEM Interest Not Compatible';
+                suggestion = 'Consider programs in your strand like Business, Communication, or Education.';
+            } else if (error === 'abm_strand_mismatch') {
+                emoji = '💼';
+                title = 'Business Interest Not Compatible';
+                suggestion = 'Consider programs in your strand like Communication, Psychology, or Education.';
+            } else if (error === 'humss_strand_mismatch') {
+                emoji = '📚';
+                title = 'Education/Social Science Interest Not Compatible';
+                suggestion = 'Consider programs in your strand like Business, Hospitality, or Technology.';
+            }
+
+            const errorDiv = document.createElement('div');
+            errorDiv.style.cssText = `
+                background: #fee2e2;
+                border: 1px solid #fecaca;
+                color: #dc2626;
+                padding: 15px;
+                border-radius: 8px;
+                margin-bottom: 20px;
+                text-align: center;
+                font-weight: 500;
+            `;
+            errorDiv.innerHTML = `
+                <strong>${emoji} ${title}</strong><br>
+                ${programs} are <strong>${exclusiveStrand}-exclusive</strong>.<br>
+                As a <strong>${strand.toUpperCase()}</strong> student, you cannot pursue these programs at this university.<br><br>
+                <strong>Suggestion:</strong> ${suggestion}
+            `;
+
+            // Insert error message at the top of the form
+            const form = document.querySelector('form');
+            form.insertBefore(errorDiv, form.firstChild);
+
+            // Scroll to top to show error
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+
+            // Clear URL parameters after showing error
+            setTimeout(() => {
+                const newUrl = window.location.pathname;
+                window.history.replaceState({}, document.title, newUrl);
+            }, 3000);
+        }
     });
 </script>
 </body>

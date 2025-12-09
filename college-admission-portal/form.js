@@ -36,6 +36,25 @@ let storedMax = parseInt(localStorage.getItem("maxUnlockedStep"));
 let maxUnlockedStep = (storedMax !== null && !isNaN(storedMax)) ? storedMax : currentStep;
 
 document.addEventListener("DOMContentLoaded", () => {
+  // Check if user has access to this page
+  if (currentStep > maxUnlockedStep) {
+    console.warn(`🚫 Access denied: currentStep (${currentStep}) > maxUnlockedStep (${maxUnlockedStep})`);
+    alert("Please complete the previous steps first.");
+    // Redirect to the last unlocked page
+    const redirectStep = Math.min(maxUnlockedStep, 6); // Don't redirect to form.html
+    switch (redirectStep) {
+      case 0: window.location.href = "index.html"; break;
+      case 1: window.location.href = "readfirst.html"; break;
+      case 2: window.location.href = "confirmation.html"; break;
+      case 3: window.location.href = "aap.html"; break;
+      case 4: window.location.href = "personal.html"; break;
+      case 5: window.location.href = "educattach.html"; break;
+      case 6: window.location.href = "programs.html"; break;
+      default: window.location.href = "index.html"; break;
+    }
+    return;
+  }
+
   const steps = document.querySelectorAll(".step");
 
   // ====== Update step UI ======
@@ -110,9 +129,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // ====== POPULATE FORM FROM LOCALSTORAGE ======
   function populateForm() {
+    console.log("🚀 populateForm() STARTED - Attempting to load form data");
     try {
       // Get all stored data from localStorage
       const personalData = JSON.parse(localStorage.getItem('personalData') || '{}');
+      console.log("📋 Loading personalData from localStorage:", personalData);
+      console.log("🎂 Age value:", personalData.age);
+
       const educationData = JSON.parse(localStorage.getItem('educationData') || '{}');
       const gradesData = JSON.parse(localStorage.getItem('gradesData') || '{}');
       const programData = JSON.parse(localStorage.getItem('programData') || '{}');
@@ -120,6 +143,32 @@ document.addEventListener("DOMContentLoaded", () => {
       const siblingData = JSON.parse(localStorage.getItem('siblingData') || '{}');
 
       console.log('📦 Parental data loaded:', parentalData);
+
+      // Debug: Check all relevant localStorage keys
+      console.log("🔍 DEBUG: Checking localStorage keys for form data:");
+      const allKeys = Object.keys(localStorage);
+      const relevantKeys = allKeys.filter(key =>
+        key.includes('edu-') || key.includes('program_') || key.includes('jhs-') ||
+        key.includes('shs-') || key.includes('personal') || key.includes('campus_') ||
+        key.includes('Data') || key.includes('Choice')
+      );
+      console.log("📝 Relevant localStorage keys:", relevantKeys);
+
+      relevantKeys.forEach(key => {
+        const value = localStorage.getItem(key);
+        console.log(`🔑 ${key}:`, value ? (value.length > 100 ? value.substring(0, 100) + '...' : value) : 'EMPTY');
+      });
+
+      // Check if personalData exists and is valid
+      if (!personalData || Object.keys(personalData).length === 0) {
+        console.warn("❌ personalData is empty or missing!");
+        console.log("💡 This means the user hasn't completed personal.html properly or data wasn't saved.");
+        alert("No personal information found. Please complete the Personal Information form first.");
+        window.location.href = "personal.html";
+        return;
+      } else {
+        console.log("✅ personalData found with keys:", Object.keys(personalData));
+      }
 
       // GET CONFIRMATION PAGE DATA
       const academicStatus = localStorage.getItem('field_academicStatus') || '';
@@ -134,6 +183,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
       // GET AAP DATA
       const aapSelection = localStorage.getItem('field_aap') || '';
+
 
       // POPULATE ACADEMIC STATUS CHECKBOXES
       const academicCheckboxes = document.querySelectorAll('.instructions-right .checkbox-item');
@@ -296,6 +346,7 @@ console.log('✅ School type updated:', schoolTypeUpdated);
       if (contactRel && personalData.contactRelationship === 'Others' && personalData.otherRelationship) {
           contactRel.textContent = personalData.otherRelationship.toUpperCase();
       }
+
 
       // EDUCATIONAL INFORMATION - Read from localStorage keys saved by educattach.js
       const seniorHighSchool = localStorage.getItem('edu-shsName') || '';
@@ -730,13 +781,15 @@ if (otherInfoSection && socioEconomicData) {
    console.log('✅ Form populated successfully from localStorage');  // ADD THIS LINE
 
     } catch (error) {
-      console.error('Error populating form:', error);
+      console.error('❌ CRITICAL ERROR in populateForm:', error);
+      console.error('❌ Form data will not be populated correctly!');
     }
+    console.log("✅ populateForm() COMPLETED");
   }
 
-  // Run on page load
-  populateForm();
-
   // ====== Initial render ======
-  updateSteps();
+  updateStepsUI();
+
+  // Run populateForm after DOM is ready
+  populateForm();
 });

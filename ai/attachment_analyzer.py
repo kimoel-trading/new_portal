@@ -182,8 +182,8 @@ class AttachmentAnalyzer:
         self._quality_model_input = None
         self._blur_threshold = 110.0
         self._crop_threshold = 0.975
-        self._max_pdf_pages = int(os.getenv("EDUC_AI_MAX_PDF_PAGES", "8"))
-        self._max_long_edge_px = int(os.getenv("EDUC_AI_MAX_LONG_EDGE", "2200"))
+        self._max_pdf_pages = int(os.getenv("EDUC_AI_MAX_PDF_PAGES", "2"))  # Process fewer pages for speed
+        self._max_long_edge_px = int(os.getenv("EDUC_AI_MAX_LONG_EDGE", "1200"))  # Reduced for faster processing
         
         # Nanonets configuration
         self._nanonets_api_key = os.getenv("NANONETS_API_KEY")
@@ -230,25 +230,10 @@ class AttachmentAnalyzer:
         quality_reports = [self._evaluate_quality(image) for image in images]
         aggregated = self._aggregate_quality(quality_reports)
 
-        # Try Nanonets first if configured, fallback to OCR
-        nanonets_result = None
-        if self._use_nanonets and requests:
-            try:
-                nanonets_result = self._call_nanonets_api(file_path, document_type=document_type)
-            except Exception as exc:
-                # Log but don't fail - fallback to OCR
-                print(f"Nanonets API call failed: {exc}")
-
-        if nanonets_result:
-            print(f"[Nanonets] API call successful for document type: {document_type}")
-            print(f"[Nanonets] Response keys: {list(nanonets_result.keys())}")
-            fields = self._convert_nanonets_to_fields(nanonets_result, document_type)
-            print(f"[Nanonets] Extracted fields: inputs={len(fields.get('inputs', {}))}, selects={len(fields.get('selects', {}))}, grade11={len(fields.get('grade11', []))}")
-            raw_text = nanonets_result.get("message", "")  # Nanonets may provide extracted text
-        else:
-            print(f"[Fallback] Using OCR instead of Nanonets for document type: {document_type}")
-            raw_text = self._extract_text(images)
-            fields = self._extract_fields(raw_text, document_type=document_type)
+        # Skip Nanonets (free trial exhausted) - use OCR directly
+        print(f"[OCR] Using OCR for document analysis (Nanonets skipped) - document type: {document_type}")
+        raw_text = self._extract_text(images)
+        fields = self._extract_fields(raw_text, document_type=document_type)
 
         return {
             "quality": aggregated,
@@ -317,7 +302,7 @@ class AttachmentAnalyzer:
         return "\n".join(chunks)
 
     def _ocr_confidence_threshold(self) -> float:
-        return float(os.getenv("EDUC_AI_OCR_CONFIDENCE", "0.5"))
+        return float(os.getenv("EDUC_AI_OCR_CONFIDENCE", "0.3"))  # Lower threshold for faster processing
 
     # ------------------------------------------------------------- field parse
     def _extract_fields(self, raw_text: str, document_type: Optional[str]) -> Dict[str, object]:
@@ -398,22 +383,32 @@ class AttachmentAnalyzer:
             "jhsMath": [
                 r"Mathematics[:\s]+(\d{2,3})",
                 r"Math\s*Grade\s*[:\-]\s*(\d{2,3})",
+                r"Math[\s\w]*[:\s]+(\d{2,3})",
+                r"Mathematics.*?\b(\d{2,3})\b",
             ],
             "jhsScience": [
                 r"Science[:\s]+(\d{2,3})",
                 r"Science\s*Grade\s*[:\-]\s*(\d{2,3})",
+                r"Science.*?\b(\d{2,3})\b",
             ],
             "jhsEnglish": [
                 r"English[:\s]+(\d{2,3})",
                 r"English\s*Grade\s*[:\-]\s*(\d{2,3})",
+                r"English.*?\b(\d{2,3})\b",
             ],
         }
         for field, patterns in grade_patterns.items():
+            old_value = inputs.get(field)
             self._capture_into(inputs, text, field, patterns, value_filter=self._is_valid_grade)
+            if inputs.get(field) != old_value:
+                print(f"[OCR] Found JHS grade {field} = {inputs[field]}")
 
-        if document_type and "senior" in document_type.lower():
+        if document_type and ("senior" in document_type.lower() or "grades form 1" in document_type.lower()):
+            print(f"[OCR] Extracting SHS subject grades for document type: {document_type}")
             subject_grades = self._extract_shs_subject_grades(text)
+            print(f"[OCR] Found subject grades: {subject_grades}")
             grade11_entries = self._map_grade11_priorities(subject_grades)
+            print(f"[OCR] Mapped to grade11 entries: {len(grade11_entries)} entries")
 
         return {
             "inputs": inputs,
@@ -451,16 +446,46 @@ class AttachmentAnalyzer:
     def _extract_shs_subject_grades(self, text: str) -> Dict[str, str]:
         results: Dict[str, str] = {}
         lines = [line.strip() for line in text.splitlines() if line.strip()]
+
+        # First pass: Look for subject names and grades on the same line
         for key, aliases in SHS_SUBJECT_ALIASES.items():
             for line in lines:
                 upper_line = line.upper()
                 if any(alias in upper_line for alias in aliases):
-                    digits = re.findall(r"\d{2,3}", line)
+                    # Look for grades in the same line
+                    digits = re.findall(r"\b(\d{2,3})\b", line)
                     if digits:
-                        results[key] = digits[-1]
-                        break
+                        grade = digits[-1]  # Take the last number found
+                        if self._is_valid_grade(grade):
+                            results[key] = grade
+                            print(f"[OCR] Found grade {grade} for subject {key} on line: {line}")
+                            break
             if key in results:
                 continue
+
+        # Second pass: If some subjects not found, try to find grades in nearby lines
+        # This helps with multi-line subject entries
+        for i, line in enumerate(lines):
+            upper_line = line.upper()
+            for key, aliases in SHS_SUBJECT_ALIASES.items():
+                if key in results:  # Already found
+                    continue
+
+                if any(alias in upper_line for alias in aliases):
+                    # Look in current line and next few lines for a grade
+                    for j in range(max(0, i-2), min(len(lines), i+3)):
+                        search_line = lines[j]
+                        digits = re.findall(r"\b(\d{2,3})\b", search_line)
+                        if digits:
+                            grade = digits[-1]
+                            if self._is_valid_grade(grade):
+                                results[key] = grade
+                                print(f"[OCR] Found grade {grade} for subject {key} near line {i}: {search_line}")
+                                break
+                    if key in results:
+                        break
+
+        print(f"[OCR] Total subjects found: {len(results)} out of {len(SHS_SUBJECT_ALIASES)}")
         return results
 
     def _map_grade11_priorities(self, subject_grades: Dict[str, str]) -> List[Dict[str, object]]:

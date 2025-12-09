@@ -302,6 +302,63 @@ function handlePhotoUpload() {
   reader.readAsDataURL(file);
 }
 
+// ================= ID VALIDATION =================
+async function validatePhotoID() {
+  console.log("🔍 validatePhotoID called");
+
+  const photoInput = document.getElementById('photoInput');
+  const savedPhotoData = localStorage.getItem("savedPhoto");
+
+  let imageData = savedPhotoData;
+
+  // If there's a newly selected file, use that instead of saved data
+  if (photoInput.files && photoInput.files[0]) {
+    console.log("📸 Using newly selected photo file");
+    imageData = await fileToBase64(photoInput.files[0]);
+  } else if (savedPhotoData) {
+    console.log("💾 Using saved photo data");
+    imageData = savedPhotoData;
+  } else {
+    throw new Error("No photo available for validation");
+  }
+
+  console.log("📡 Sending photo to AI validation service...");
+
+  const response = await fetch('http://127.0.0.1:5001/verify', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      image: imageData
+    })
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => 'Unknown error');
+    throw new Error(`AI validation service error: ${response.status} - ${errorText}`);
+  }
+
+  const result = await response.json();
+  console.log("🔍 Validation result:", result);
+
+  return result;
+}
+
+// ================= FILE TO BASE64 =================
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      // Remove data:image/...;base64, prefix if present
+      const base64 = reader.result.split(',')[1] || reader.result;
+      resolve(base64);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
 // ================= SIBLINGS SHOW/HIDE =================
 document.getElementById("hasSiblingsYes").addEventListener("change", () => {
   document.getElementById("addSiblingHeader").style.display = "block";
@@ -645,6 +702,31 @@ async function handleNext() {
     document.querySelector(".photo-error").style.display = "block";
     error = true;
     if (!firstErrorElement) firstErrorElement = document.querySelector('.photo-box');
+  }
+
+  // ID validation check - only if photo exists
+  if ((photo.files && photo.files[0]) || savedPhotoData) {
+    console.log("🔍 Starting ID validation...");
+    try {
+      const validationResult = await validatePhotoID();
+      if (!validationResult.is_valid) {
+        // Show validation errors
+        const errorMsg = validationResult.messages.join(". ");
+        document.querySelector(".photo-error").textContent = `ID validation failed: ${errorMsg}`;
+        document.querySelector(".photo-error").style.display = "block";
+        error = true;
+        if (!firstErrorElement) firstErrorElement = document.querySelector('.photo-box');
+        console.log("❌ ID validation failed:", validationResult);
+      } else {
+        console.log("✅ ID validation passed");
+      }
+    } catch (validationError) {
+      console.error("ID validation error:", validationError);
+      document.querySelector(".photo-error").textContent = "ID validation service unavailable. Please try again.";
+      document.querySelector(".photo-error").style.display = "block";
+      error = true;
+      if (!firstErrorElement) firstErrorElement = document.querySelector('.photo-box');
+    }
   }
 
   // Nationality Required
@@ -1029,13 +1111,57 @@ if (siblingsError) {
     return;
   }
 
+  console.log("🔄 handleNext: Starting data processing");
   try {
     const payload = buildPersonalPayload();
+    console.log("📋 buildPersonalPayload result:", payload);
     // Data will be saved on final submit - skip step-by-step save
     // await savePersonalData(payload);
 
     // Build summary snapshots for review page
     try {
+      // Calculate age from birthdate
+      const calculateAge = (birthdate) => {
+        console.log("🧮 calculateAge called with:", birthdate);
+        if (!birthdate) {
+          console.log("❌ No birthdate provided");
+          return "";
+        }
+
+        try {
+          const birth = new Date(birthdate);
+          const today = new Date();
+
+          console.log("📅 Birth date object:", birth);
+          console.log("📅 Today date object:", today);
+          console.log("📅 Birth year:", birth.getFullYear(), "Today year:", today.getFullYear());
+
+          let age = today.getFullYear() - birth.getFullYear();
+          const monthDiff = today.getMonth() - birth.getMonth();
+
+          console.log("🧮 Initial age calculation:", age, "Month diff:", monthDiff);
+
+          // If birthday hasn't occurred this year yet, subtract 1
+          if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birth.getDate())) {
+            age--;
+            console.log("🎂 Birthday hasn't occurred this year, age adjusted to:", age);
+          }
+
+          const finalAge = age > 0 ? age.toString() : "";
+          console.log("✅ Final age:", finalAge);
+          return finalAge;
+        } catch (e) {
+          console.warn("❌ Failed to calculate age from birthdate:", birthdate, e);
+          return "";
+        }
+      };
+
+      const calculatedAge = calculateAge(payload.birthdate);
+      console.log("🎂 Age calculation:", {
+        birthdate: payload.birthdate,
+        calculatedAge: calculatedAge
+      });
+
       const personalData = {
         surname: payload.last_name,
         firstName: payload.first_name,
@@ -1044,7 +1170,7 @@ if (siblingsError) {
         zipCode: "", // not captured separately
         dateOfBirth: payload.birthdate,
         sex: payload.sex,
-        age: "", // computed on backend if needed
+        age: calculatedAge, // Auto-calculate age from birthdate
         religion: "", // not explicitly stored
         nationality: payload.nationality,
         contactPerson: payload.contact_name,
@@ -1055,6 +1181,8 @@ if (siblingsError) {
         contactMobile: payload.contact_mobile,
         contactRelationship: payload.contact_relationship
       };
+
+      console.log("💾 Saving personalData:", personalData);
 
       const parents = JSON.parse(payload.siblings_info ? "[]" : "[]"); // placeholder, see parentalData below
 
@@ -1097,14 +1225,21 @@ if (siblingsError) {
         monthlyIncome: payload.family_income_range || ""
       };
 
+      console.log("💾 Saving to localStorage:");
+      console.log("💾 personalData:", personalData);
       localStorage.setItem("personalData", JSON.stringify(personalData));
       localStorage.setItem("parentalData", JSON.stringify(parentalData));
       localStorage.setItem("siblingData", JSON.stringify(siblingData));
       localStorage.setItem("socioEconomicData", JSON.stringify(socioEconomicData));
+      console.log("✅ Data saved to localStorage successfully");
     } catch (e) {
-      console.warn("Failed to build summary snapshots:", e);
+      console.error("❌ CRITICAL ERROR: Failed to build summary snapshots:", e);
+      console.error("❌ This means personal data won't be saved to localStorage!");
+      console.error("❌ Stack trace:", e.stack);
+      alert("Error saving personal information. Please check the console and try again.");
     }
 
+    // Only unlock next step after successful validation and data save
     const next = Math.max(maxUnlockedStep, currentStep + 1);
     maxUnlockedStep = next;
     localStorage.setItem("maxUnlockedStep", next);
@@ -1418,22 +1553,30 @@ if (currentStep > maxUnlockedStep) {
 
 const steps = document.querySelectorAll(".step");
 
-// 6️⃣ Apply UI states
+// 6️⃣ Apply UI states - flexible navigation: can go back to completed pages
 steps.forEach((step, index) => {
   if (index === currentStep) {
     step.classList.add("active");
   }
 
+  // Flexible navigation: can go back to completed pages, but can't skip ahead
   if (index <= maxUnlockedStep) {
     step.classList.add("unlocked");
     step.style.cursor = "pointer";
+    step.style.opacity = "1";
 
     step.querySelectorAll("*").forEach(el => el.style.pointerEvents = "none");
 
     step.addEventListener("click", () => {
-      localStorage.setItem("maxUnlockedStep", Math.max(maxUnlockedStep, index));
+      // Flexible navigation: can go back to completed pages, but can't skip ahead
+      if (index > maxUnlockedStep + 1) return; // Can't go more than one step ahead
+
       window.location.href = pageMap[index];
     });
+  } else {
+    step.classList.remove("unlocked");
+    step.style.cursor = "default";
+    step.style.opacity = "0.5";
   }
 });
 
@@ -1689,12 +1832,107 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 
+// =====================================================
+// LOAD ALL SAVED FORM DATA ON PAGE LOAD
+// =====================================================
+function loadAllFormData() {
+  console.log("🔄 Loading all saved form data...");
+
+  // Load personal data
+  const personalData = localStorage.getItem("personalData");
+  if (personalData) {
+    try {
+      const data = JSON.parse(personalData);
+      console.log("📝 Loading personal data:", data);
+
+      // Populate basic info fields
+      if (data.surname) document.getElementById("surname").value = data.surname;
+      if (data.firstName) document.getElementById("firstName").value = data.firstName;
+      if (data.middleName) document.getElementById("middleName").value = data.middleName;
+      if (data.address) document.getElementById("houseAddress").value = data.address;
+      if (data.zipCode) document.getElementById("zipCode").value = data.zipCode;
+    } catch (e) {
+      console.warn("⚠️ Error loading personal data:", e);
+    }
+  }
+
+  // Load parental data
+  const parentalData = localStorage.getItem("parentalData");
+  if (parentalData) {
+    try {
+      const data = JSON.parse(parentalData);
+      console.log("👨‍👩‍👧‍👦 Loading parental data:", data);
+
+      // Populate parent fields
+      if (data.motherFirst) document.querySelector('[data-field="mother_first_name"]').innerText = data.motherFirst;
+      if (data.motherMiddle) document.querySelector('[data-field="mother_middle_name"]').innerText = data.motherMiddle;
+      if (data.motherLast) document.querySelector('[data-field="mother_last_name"]').innerText = data.motherLast;
+      if (data.motherMaiden) document.querySelector('[data-field="mother_maiden_name"]').innerText = data.motherMaiden;
+      if (data.motherAge) document.querySelector('[data-field="mother_age"]').innerText = data.motherAge;
+      if (data.motherOccupation) document.querySelector('[data-field="mother_occupation"]').innerText = data.motherOccupation;
+      if (data.motherContact) document.querySelector('[data-field="mother_contact_no"]').innerText = data.motherContact;
+
+      if (data.fatherFirst) document.querySelector('[data-field="father_first_name"]').innerText = data.fatherFirst;
+      if (data.fatherMiddle) document.querySelector('[data-field="father_middle_name"]').innerText = data.fatherMiddle;
+      if (data.fatherLast) document.querySelector('[data-field="father_last_name"]').innerText = data.fatherLast;
+      if (data.fatherAge) document.querySelector('[data-field="father_age"]').innerText = data.fatherAge;
+      if (data.fatherOccupation) document.querySelector('[data-field="father_occupation"]').innerText = data.fatherOccupation;
+      if (data.fatherContact) document.querySelector('[data-field="father_contact_no"]').innerText = data.fatherContact;
+    } catch (e) {
+      console.warn("⚠️ Error loading parental data:", e);
+    }
+  }
+
+  // Load sibling data
+  const siblingData = localStorage.getItem("siblingData");
+  if (siblingData) {
+    try {
+      const data = JSON.parse(siblingData);
+      console.log("👥 Loading sibling data:", data);
+      // Sibling data loading is handled by existing loadSiblings functions
+    } catch (e) {
+      console.warn("⚠️ Error loading sibling data:", e);
+    }
+  }
+
+  // Load socio-economic data
+  const socioEconomicData = localStorage.getItem("socioEconomicData");
+  if (socioEconomicData) {
+    try {
+      const data = JSON.parse(socioEconomicData);
+      console.log("💰 Loading socio-economic data:", data);
+      // Socio-economic data loading is handled by existing functions
+    } catch (e) {
+      console.warn("⚠️ Error loading socio-economic data:", e);
+    }
+  }
+
+  // Load photo
+  const savedPhoto = localStorage.getItem("savedPhoto");
+  if (savedPhoto) {
+    try {
+      console.log("📸 Loading saved photo");
+      // Photo loading is handled by existing photo load functions
+    } catch (e) {
+      console.warn("⚠️ Error loading photo:", e);
+    }
+  }
+
+  console.log("✅ All form data loaded from localStorage");
+}
+
 // ==================== DEBUG CONSOLE ====================
 window.addEventListener("DOMContentLoaded", () => {
+  loadAllFormData();
+
   console.log("=== 📊 AUTO-SAVE STATUS ===");
   console.log("Income:", localStorage.getItem("income"));
   console.log("Has Siblings:", localStorage.getItem("hasSiblings"));
   console.log("Siblings Summary:", localStorage.getItem("siblingsSummary"));
+  console.log("Personal Data:", localStorage.getItem("personalData"));
+  console.log("Parental Data:", localStorage.getItem("parentalData"));
+  console.log("Sibling Data:", localStorage.getItem("siblingData"));
+  console.log("Socio-Economic Data:", localStorage.getItem("socioEconomicData"));
 });
 
 // =====================================================

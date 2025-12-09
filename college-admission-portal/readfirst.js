@@ -44,6 +44,7 @@ document.addEventListener("DOMContentLoaded", () => {
       step.classList.toggle("active", index === currentStep);
 
       // CLICKABLE or LOCKED
+      // Flexible navigation: can go back to completed pages, but can't skip ahead
       if (index <= maxUnlockedStep) {
         step.classList.add("clickable");
         step.style.pointerEvents = "auto";
@@ -51,7 +52,7 @@ document.addEventListener("DOMContentLoaded", () => {
       } else {
         step.classList.remove("clickable");
         step.style.pointerEvents = "none";
-        step.style.opacity = "1";
+        step.style.opacity = "0.5";
       }
     });
 
@@ -63,7 +64,8 @@ document.addEventListener("DOMContentLoaded", () => {
   // ====== Step click navigation ======
   steps.forEach((step, index) => {
     step.addEventListener("click", () => {
-      if (index > maxUnlockedStep) return; // block locked steps
+      // Flexible navigation: can go back to completed pages, but can't skip ahead
+      if (index > maxUnlockedStep + 1) return; // Can't go more than one step ahead
 
       currentStep = index;
       updateSteps();

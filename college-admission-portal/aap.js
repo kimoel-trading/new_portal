@@ -227,41 +227,60 @@ document.addEventListener("DOMContentLoaded", function() {
 
 const steps = document.querySelectorAll(".step");
 
-// Update UI function
+// Ensure the AAP Next button always has a handler (in case inline onclick fails)
+document.addEventListener("DOMContentLoaded", () => {
+  const nextBtn = document.querySelector(".btn-next");
+  if (nextBtn) {
+    nextBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      try {
+        handleNext();
+      } catch (err) {
+        console.error("❌ handleNext failed:", err);
+        showNotification("Unexpected error. Please try again.");
+      }
+    });
+  } else {
+    console.warn("⚠️ AAP Next button not found (.btn-next)");
+  }
+});
+
+// Update UI function - flexible navigation: can go back to completed pages
 function updateStepsUI() {
   steps.forEach((stepEl, idx) => {
     stepEl.classList.toggle("active", idx === currentStep);
-    stepEl.classList.toggle("unlocked", idx <= maxUnlockedStep);
 
-    // ensure pointer and cursor
-    stepEl.style.pointerEvents = (idx <= maxUnlockedStep) ? "auto" : "none";
-    stepEl.style.cursor = (idx <= maxUnlockedStep) ? "pointer" : "default";
+    // Flexible navigation: can go back to completed pages, but can't skip ahead
+    if (idx <= maxUnlockedStep) {
+      stepEl.classList.add("unlocked");
+      stepEl.style.pointerEvents = "auto";
+      stepEl.style.cursor = "pointer";
+      stepEl.style.opacity = "1";
+    } else {
+      stepEl.classList.remove("unlocked");
+      stepEl.style.pointerEvents = "none";
+      stepEl.style.cursor = "default";
+      stepEl.style.opacity = "0.5";
+    }
   });
 }
 
-// Make steps interactive
+// Make steps interactive - flexible navigation
 steps.forEach((stepEl, idx) => {
-  if (idx <= maxUnlockedStep) {
-    // attach handler — using delegation here ensures duplicates aren't attached on reload,
-    // but we guard by removing previous handlers in case script is re-run
-    stepEl.addEventListener('click', (ev) => {
-      // Save progress: if user clicked ahead of current max, expand unlocked range
-      if (idx > maxUnlockedStep) {
-        maxUnlockedStep = idx;
-        localStorage.setItem(STORAGE_KEY, String(maxUnlockedStep));
-      }
+  stepEl.addEventListener('click', (ev) => {
+    // Flexible navigation: can go back to completed pages, but can't skip ahead
+    if (idx > maxUnlockedStep + 1) return; // Can't go more than one step ahead
 
-      // Save the chosen step as current progress as well (so toggling persists)
-      localStorage.setItem("lastVisitedStep", String(idx));
+    // Save the chosen step as current progress
+    localStorage.setItem("lastVisitedStep", String(idx));
 
-      // navigate to corresponding page
+    // navigate to corresponding page
       const target = pageMap[idx] || pageMap[0];
       // small delay to ensure storage writes happen
       setTimeout(() => {
         window.location.href = target;
       }, 50);
     });
-  }
 });
 
 // ensure UI reflects current values
@@ -271,36 +290,65 @@ updateStepsUI();
 // NEXT BUTTON HANDLER (AAP page)
 // =====================================================
 function handleNext() {
+  console.log("🎯 handleNext() called in AAP page");
+
   const aapField = document.getElementById('aapField');
   const AFProg = document.querySelector('input[name="aap"]:checked');
+
+  console.log("📋 aapField element:", aapField);
+  console.log("🔘 Selected AAP option:", AFProg);
+  console.log("🔘 Selected value:", AFProg ? AFProg.value : "NONE SELECTED");
+
   let error = false;
 
   if (!AFProg) {
-    if (aapField) aapField.classList.add("error");
+    console.log("❌ No AAP option selected - showing error");
+    if (aapField) {
+      aapField.classList.add("error");
+      console.log("✅ Error class added to aapField");
+    }
     error = true;
   } else {
+    console.log("✅ AAP option selected:", AFProg.value);
     if (aapField) aapField.classList.remove("error");
     // save radio choice
     const key = "field_aap";
     localStorage.setItem(key, AFProg.value);
+    console.log("💾 Saved to localStorage:", key, "=", AFProg.value);
   }
 
   if (error) {
-    showNotification("Please complete all required fields before proceeding.");
+    console.log("🚫 Validation failed - preventing navigation");
+    showNotification("Please select an Academic Assistance Program option before proceeding.");
     window.scrollTo({ top: 0, behavior: "smooth" });
     return;
   }
 
-  // Unlock next step and save progress
-  const next = Math.max(maxUnlockedStep, currentStep + 1);
-  maxUnlockedStep = next;
-  localStorage.setItem(STORAGE_KEY, String(maxUnlockedStep));
+  console.log("✅ Validation passed - proceeding to next page");
 
-  // Also store last visited/current step
-  localStorage.setItem("lastVisitedStep", String(currentStep + 1));
+  // 🔒 Force-unlock next step safely
+  try {
+    const next = Math.max(maxUnlockedStep, currentStep + 1);
+    maxUnlockedStep = next;
+    localStorage.setItem(STORAGE_KEY, String(maxUnlockedStep));
+    // also keep a generic key some pages may read
+    localStorage.setItem("maxUnlockedStep", String(maxUnlockedStep));
+    localStorage.setItem("currentStep", String(currentStep + 1));
+    localStorage.setItem("lastVisitedStep", String(currentStep + 1));
+    console.log("💾 Progress saved:", { currentStep, maxUnlockedStep });
+  } catch (err) {
+    console.warn("⚠️ Failed to save progress keys:", err);
+  }
 
-  // Data will be saved on final submit - just navigate to next page
+  // ✅ Hard navigation to next page
   window.location.href = "personal.html";
+  // Fallback: if navigation is blocked, force replace after a short delay
+  setTimeout(() => {
+    if (window.location.pathname.toLowerCase().includes("aap.html")) {
+      console.warn("⚠️ Navigation still on AAP, forcing redirect.");
+      window.location.replace("personal.html");
+    }
+  }, 800);
 }
 
 // Expose handleNext to global scope so onclick HTML can call it

@@ -44,6 +44,23 @@ let currentStep = pageToStep[currentPage] !== undefined ? pageToStep[currentPage
 let maxUnlockedStep = parseInt(localStorage.getItem("maxUnlockedStep")) || currentStep;
 
 document.addEventListener("DOMContentLoaded", () => {
+  // Check if user has access to this page
+  if (currentStep > maxUnlockedStep) {
+    console.warn(`🚫 Access denied: currentStep (${currentStep}) > maxUnlockedStep (${maxUnlockedStep})`);
+    alert("Please complete the previous steps first.");
+    // Redirect to the last unlocked page
+    const redirectStep = Math.min(maxUnlockedStep, 4); // Don't redirect to educattach if not unlocked
+    switch (redirectStep) {
+      case 0: window.location.href = "index.html"; break;
+      case 1: window.location.href = "readfirst.html"; break;
+      case 2: window.location.href = "confirmation.html"; break;
+      case 3: window.location.href = "aap.html"; break;
+      case 4: window.location.href = "personal.html"; break;
+      default: window.location.href = "personal.html"; break;
+    }
+    return;
+  }
+
   console.log("[DEBUG] DOMContentLoaded - Page ready");
   const steps = document.querySelectorAll(".step");
 
@@ -53,7 +70,7 @@ document.addEventListener("DOMContentLoaded", () => {
       // ACTIVE step (green)
       step.classList.toggle("active", index === currentStep);
 
-      // CLICKABLE or LOCKED
+      // CLICKABLE or LOCKED - flexible navigation: can go back to completed pages
       if (index <= maxUnlockedStep) {
         step.classList.add("clickable");
         step.style.pointerEvents = "auto";
@@ -61,7 +78,7 @@ document.addEventListener("DOMContentLoaded", () => {
       } else {
         step.classList.remove("clickable");
         step.style.pointerEvents = "none";
-        step.style.opacity = "1";
+        step.style.opacity = "0.5";
       }
     });
 
@@ -73,7 +90,8 @@ document.addEventListener("DOMContentLoaded", () => {
   // ====== Step click navigation ======
   steps.forEach((step, index) => {
     step.addEventListener("click", () => {
-      if (index > maxUnlockedStep) return; // block locked steps
+      // Flexible navigation: can go back to completed pages, but can't skip ahead
+      if (index > maxUnlockedStep + 1) return; // Can't go more than one step ahead
 
       currentStep = index;
       updateSteps();
@@ -858,6 +876,26 @@ function fileToBase64(file) {
   });
 }
 
+// ================= UPDATE PROGRESS STEP =================
+function updateProgressStep(statusElement, stepIndex, status) {
+  if (!statusElement) return;
+
+  const progressContainer = statusElement.querySelector('.upload-progress');
+  if (!progressContainer) return;
+
+  const steps = progressContainer.querySelectorAll('.progress-step');
+
+  // Remove all status classes first
+  steps.forEach(step => {
+    step.classList.remove('active', 'completed');
+  });
+
+  // Add the new status to the specified step
+  if (steps[stepIndex]) {
+    steps[stepIndex].classList.add(status);
+  }
+}
+
 // =====================================================
 // RESTORE & SAVE ALL PROGRESS (JHS, SHS, Uploaded Files)
 // =====================================================
@@ -1239,7 +1277,7 @@ window.removeFile = function (fileNumber) {
 // HANDLE FILE UPLOAD WITH AI ANALYSIS & PERSISTENCE
 // =====================================================
 const AI_ANALYZE_ENDPOINT = "http://127.0.0.1:5001/attachments/analyze";
-const AI_ANALYZE_TIMEOUT = 120000; // 120s for larger multi-page PDFs
+const AI_ANALYZE_TIMEOUT = 30000; // 30s for faster user experience
 
 // Debug: Log endpoint configuration
 console.log("[DEBUG] AI_ANALYZE_ENDPOINT configured:", AI_ANALYZE_ENDPOINT);
@@ -1264,7 +1302,12 @@ async function handleFileUpload(num, label) {
   if (status) {
     status.innerHTML = `
       <i class="fa-solid fa-spinner fa-spin" style="color:#0d6efd;"></i>
-      Analyzing ${escapeHtml(file.name)}...
+      <div class="upload-progress">
+        <div class="progress-step active">Converting file...</div>
+        <div class="progress-step">Analyzing with AI...</div>
+        <div class="progress-step">Processing results...</div>
+      </div>
+      <div class="upload-estimate">Estimated time: 10-20 seconds</div>
     `;
   }
 
@@ -1273,11 +1316,20 @@ async function handleFileUpload(num, label) {
 
   try {
     console.log(`[DEBUG] Starting AI analysis for file: ${file.name}`);
-    
+
+    // Update progress: Converting file
+    updateProgressStep(status, 0, 'completed');
+    updateProgressStep(status, 1, 'active');
+
     // Convert to base64 first (needed for both AI analysis and localStorage)
     const base64 = await fileToBase64(file);
     console.log(`[DEBUG] Base64 conversion complete, length: ${base64.length}`);
-    
+
+    // Update progress: Analyzing with AI
+    updateProgressStep(status, 0, 'completed');
+    updateProgressStep(status, 1, 'completed');
+    updateProgressStep(status, 2, 'active');
+
     const analysis = await analyzeAttachmentWithAI(file, type, base64);
     console.log(`[DEBUG] AI analysis completed:`, analysis);
     uploadedFiles[num].analysis = analysis;
@@ -1319,6 +1371,9 @@ async function handleFileUpload(num, label) {
       // Re-throw other storage errors
       throw storageError;
     }
+
+    // Update progress: Processing results
+    updateProgressStep(status, 2, 'completed');
 
     // Only auto-fill when Grades Form 1 (file #1) is processed
     if (num === 1) {

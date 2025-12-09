@@ -56,11 +56,13 @@ document.addEventListener("DOMContentLoaded", () => {
       const icon = step.querySelector("i");
       const label = step.querySelector("p");
 
+      // Flexible navigation: can go back to completed pages, but can't skip ahead
       if (index <= maxUnlockedStep) {
         step.classList.add("clickable");
         step.style.pointerEvents = "auto";
         icon?.style.setProperty("opacity", "1");
         label.style.opacity = "1";
+        circle.style.borderColor = "#007bff";
       } else {
         step.classList.remove("clickable");
         step.style.pointerEvents = "none";
@@ -80,11 +82,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
   steps.forEach((step, index) => {
     step.addEventListener("click", async () => {
-      if (index <= maxUnlockedStep) {
-        currentStep = index;
-        updateSteps();
-        await updateSectionVisibility();
-      }
+      // Flexible navigation: can go back to completed pages, but can't skip ahead
+      if (index > maxUnlockedStep + 1) return; // Can't go more than one step ahead
+
+      currentStep = index;
+      updateSteps();
+      await updateSectionVisibility();
     });
   });
 

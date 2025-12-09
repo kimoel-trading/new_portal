@@ -1021,3 +1021,43 @@ input[type="checkbox"] {
   border: 2px solid #dc3535 !important;
   background-color: #fff6f6 !important;
 }
+
+/* UPLOAD PROGRESS INDICATORS */
+.upload-progress {
+  margin-top: 8px;
+  font-size: 0.85rem;
+  color: #666;
+}
+
+.progress-step {
+  margin: 4px 0;
+  padding: 2px 8px;
+  border-radius: 4px;
+  transition: all 0.3s ease;
+  opacity: 0.6;
+}
+
+.progress-step.active {
+  background-color: #e3f2fd;
+  color: #1976d2;
+  opacity: 1;
+  font-weight: 500;
+}
+
+.progress-step.completed {
+  background-color: #e8f5e8;
+  color: #2e7d32;
+  opacity: 1;
+}
+
+.progress-step.completed::before {
+  content: "✓ ";
+  font-weight: bold;
+}
+
+.upload-estimate {
+  margin-top: 8px;
+  font-size: 0.75rem;
+  color: #888;
+  font-style: italic;
+}

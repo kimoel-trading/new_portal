@@ -129,6 +129,7 @@ function initSteps() {
     steps.forEach((step, index) => {
       step.classList.toggle("active", index === currentStep);
 
+      // Flexible navigation: can go back to completed pages, but can't skip ahead
       if (index <= maxUnlockedStep) {
         step.classList.add("clickable");
         step.style.pointerEvents = "auto";
@@ -136,7 +137,7 @@ function initSteps() {
       } else {
         step.classList.remove("clickable");
         step.style.pointerEvents = "none";
-        step.style.opacity = "1";
+        step.style.opacity = "0.5";
       }
     });
 
@@ -146,11 +147,10 @@ function initSteps() {
 
   steps.forEach((step, index) => {
     step.addEventListener("click", () => {
-      if (index > maxUnlockedStep) return;
+      // Flexible navigation: can go back to completed pages, but can't skip ahead
+      if (index > maxUnlockedStep + 1) return; // Can't go more than one step ahead
+
       currentStep = index;
-      if (currentStep === maxUnlockedStep && maxUnlockedStep < steps.length - 1) {
-        maxUnlockedStep++;
-      }
       updateSteps();
 
       switch (index) {
@@ -400,6 +400,115 @@ function initProgramFiltering() {
       campusSelect.disabled = true;
     }
   });
+
+  // Check for AI recommendations from questionnaire AFTER dropdowns are populated
+  setTimeout(() => {
+    checkForAIRecommendations(rows, allowedPrograms, gradeBuckets);
+  }, 100);
+}
+
+function checkForAIRecommendations(rows, allowedPrograms, gradeBuckets) {
+  // Check URL parameters for AI recommendations flag
+  const urlParams = new URLSearchParams(window.location.search);
+  if (urlParams.get('ai_recommendations') === '1') {
+    console.log('🎯 AI recommendations detected, fetching from server...');
+
+    // Fetch AI recommendations from PHP session
+    fetch('get_ai_recommendations.php')
+      .then(response => response.json())
+      .then(data => {
+        console.log('📡 AI recommendations response:', data);
+
+        if (data.success && data.recommendations && data.recommendations.length > 0) {
+          console.log('✅ Applying AI recommendations:', data.recommendations);
+
+          // Auto-fill the first 3 program choices with AI recommendations
+          const recommendations = data.recommendations.slice(0, 3);
+
+          recommendations.forEach((recommendedProgram, index) => {
+            if (index < rows.length) {
+              const row = rows[index];
+              const programSelect = row.querySelector('.program-select');
+              const campusSelect = row.querySelector('.campus-select-input');
+
+              // Find the program in allowed programs
+              const programData = allowedPrograms.find(p => p.program === recommendedProgram);
+
+              if (programData && programSelect && campusSelect) {
+                console.log(`🎓 Setting choice ${index + 1} to: ${recommendedProgram}`);
+
+                // Check if the option exists in the dropdown
+                const optionExists = Array.from(programSelect.options).some(opt => opt.value === recommendedProgram);
+                if (optionExists) {
+                  // Set program selection
+                  programSelect.value = recommendedProgram;
+                  programSelect.dispatchEvent(new Event('change', { bubbles: true }));
+
+                  // Set campus selection (use first available campus)
+                  if (programData.campuses && programData.campuses.length > 0) {
+                    setTimeout(() => {
+                      const firstCampus = programData.campuses[0];
+                      const campusOptionExists = Array.from(campusSelect.options).some(opt => opt.value === firstCampus);
+
+                      if (campusOptionExists) {
+                        campusSelect.value = firstCampus;
+                        campusSelect.dispatchEvent(new Event('change', { bubbles: true }));
+
+                        // Save to localStorage
+                        localStorage.setItem(`program_choice_${index + 1}`, recommendedProgram);
+                        localStorage.setItem(`campus_choice_${index + 1}`, firstCampus);
+
+                        console.log(`✅ Choice ${index + 1} set: ${recommendedProgram} at ${firstCampus}`);
+                      } else {
+                        console.warn(`⚠️ Campus ${firstCampus} not available for ${recommendedProgram}`);
+                      }
+                    }, 200);
+                  } else {
+                    console.warn(`⚠️ No campuses available for ${recommendedProgram}`);
+                  }
+                } else {
+                  console.warn(`⚠️ Program ${recommendedProgram} not found in dropdown options`);
+                }
+              } else {
+                console.warn(`⚠️ Could not find program data for ${recommendedProgram}`);
+              }
+            }
+          });
+
+          // Show success notification and highlight the filled choices
+          setTimeout(() => {
+            showNotification('✨ AI recommendations have been applied to your program choices!', 'success');
+
+            // Add a subtle highlight animation to the filled choices
+            recommendations.forEach((_, index) => {
+              if (index < rows.length) {
+                const row = rows[index];
+                row.style.transition = 'box-shadow 0.5s ease, transform 0.5s ease';
+                row.style.boxShadow = '0 0 20px rgba(16, 185, 129, 0.4)';
+                row.style.transform = 'scale(1.02)';
+
+                // Remove highlight after animation
+                setTimeout(() => {
+                  row.style.boxShadow = '';
+                  row.style.transform = '';
+                }, 3000);
+              }
+            });
+          }, 800);
+
+          // Clean up URL
+          const newUrl = window.location.pathname;
+          window.history.replaceState({}, document.title, newUrl);
+        } else {
+          console.warn('⚠️ No AI recommendations found or invalid response');
+          showNotification('No AI recommendations were found. Please try the questionnaire again.', 'error');
+        }
+      })
+      .catch(error => {
+        console.error('❌ Failed to load AI recommendations:', error);
+        showNotification('Failed to load AI recommendations. Please try again.', 'error');
+      });
+  }
 }
 
 function initValidation() {
@@ -491,8 +600,37 @@ function showError(errorNotif, message = 'Please fill all required fields before
   }, 3000);
 }
 
+// Initialize questionnaire button
+function initQuestionnaireButton() {
+  const questionnaireBtn = document.getElementById('questionnaireBtn');
+  if (questionnaireBtn) {
+    questionnaireBtn.addEventListener('click', () => {
+      window.location.href = 'questionnaire.html';
+    });
+  }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
+  // Check if user has access to this page
+  if (currentStep > maxUnlockedStep) {
+    console.warn(`🚫 Access denied: currentStep (${currentStep}) > maxUnlockedStep (${maxUnlockedStep})`);
+    alert("Please complete the previous steps first.");
+    // Redirect to the last unlocked page
+    const redirectStep = Math.min(maxUnlockedStep, 5); // Don't redirect to programs if not unlocked
+    switch (redirectStep) {
+      case 0: window.location.href = "index.html"; break;
+      case 1: window.location.href = "readfirst.html"; break;
+      case 2: window.location.href = "confirmation.html"; break;
+      case 3: window.location.href = "aap.html"; break;
+      case 4: window.location.href = "personal.html"; break;
+      case 5: window.location.href = "educattach.html"; break;
+      default: window.location.href = "educattach.html"; break;
+    }
+    return;
+  }
+
   initSteps();
   initProgramFiltering();
   initValidation();
+  initQuestionnaireButton();
 });

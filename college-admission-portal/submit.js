@@ -47,7 +47,7 @@ document.addEventListener("DOMContentLoaded", () => {
       // ACTIVE step (highlighted)
       step.classList.toggle("active", index === currentStep);
 
-      // Make all steps up to maxUnlockedStep clickable
+      // Flexible navigation: can go back to completed pages, but can't skip ahead
       if (index <= maxUnlockedStep) {
         step.classList.add("clickable");
         step.style.pointerEvents = "auto";
@@ -70,11 +70,8 @@ document.addEventListener("DOMContentLoaded", () => {
   // ====== Step click navigation ======
   steps.forEach((step, index) => {
     step.addEventListener("click", () => {
-      // Allow navigation to any unlocked step (including backward navigation)
-      if (index > maxUnlockedStep) {
-        console.log('Step locked:', index);
-        return;
-      }
+      // Flexible navigation: can go back to completed pages, but can't skip ahead
+      if (index > maxUnlockedStep + 1) return; // Can't go more than one step ahead
 
       currentStep = index;
       updateSteps();
