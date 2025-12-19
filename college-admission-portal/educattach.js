@@ -131,76 +131,11 @@ let uploadedFiles = {
 };
 
 // =====================================================
-// HANDLE FILE UPLOAD
-// - label param optional. If not passed, reads data-type from the input element.
-// - removes red error highlights for that upload box when file is selected
+// OLD handleFileUpload FUNCTION - DISABLED
+// This function bypassed AI quality checks
+// The correct version with AI validation is at line 1286
 // =====================================================
-async function handleFileUpload(num, label) {
-  const input = document.getElementById(`file${num}`);
-  const status = document.getElementById(`status${num}`);
-  const file = input && input.files ? input.files[0] : null;
-
-  if (file) {
-    // Check file size (3MB = 3 * 1024 * 1024 bytes)
-    const maxSize = 3 * 1024 * 1024; // 3MB
-    if (file.size > maxSize) {
-      showNotification(`File "${file.name}" is too large. Maximum file size is 3.0 MB. Please choose a smaller file.`, "error");
-      input.value = ''; // Clear the input
-      return;
-    }
-
-    const type = label || (input && input.dataset && input.dataset.type) || "Required";
-    uploadedFiles[num] = { file, type };
-
-    // Convert to Base64 and store in localStorage for final submit
-    try {
-      const base64 = await fileToBase64(file);
-      try {
-        localStorage.setItem(`file_base64_${num}`, base64);
-        localStorage.setItem(`file_name_${num}`, file.name);
-      } catch (storageError) {
-        // Handle localStorage quota exceeded error
-        if (storageError.name === 'QuotaExceededError' || storageError.message.includes('quota') || storageError.message.includes('exceeded')) {
-          showNotification('The file upload exceeded 3mb limit.', 'error');
-          input.value = ''; // Clear the input
-          if (status) status.textContent = 'No file chosen';
-          return;
-        }
-        // Re-throw other storage errors
-        throw storageError;
-      }
-    } catch (e) {
-      // Check if it's a quota error that wasn't caught above
-      if (e.name === 'QuotaExceededError' || e.message.includes('quota') || e.message.includes('exceeded')) {
-        showNotification('The file upload exceeded 3mb limit.', 'error');
-        input.value = ''; // Clear the input
-        if (status) status.textContent = 'No file chosen';
-        return;
-      }
-      console.warn(`Failed to convert file ${num} to Base64:`, e);
-    }
-
-    // update status text
-    if (status) {
-      status.innerHTML = `
-        <i class="fa-solid fa-circle-check" style="color:#28a745;"></i>
-        ${escapeHtml(file.name)}
-      `;
-    }
-
-    // Remove red highlight from upload box (if any)
-    const uploadBox = input ? input.closest(".upload-controls") : null;
-    if (uploadBox) uploadBox.classList.remove("input-error");
-
-    // Also remove 'input-error' from any required text input inside the same upload-controls area
-    if (uploadBox) {
-      const requiredInside = uploadBox.querySelectorAll(".form-input.input-error");
-      requiredInside.forEach(el => el.classList.remove("input-error"));
-    }
-
-    updateFileList();
-  }
-}
+// REMOVED: This function was saving files without AI quality check
 
 // =====================================================
 // UPDATE FILE LIST TABLE
@@ -1055,33 +990,11 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 // =====================================================
-// SAVE FILE UPLOADS TO LOCALSTORAGE
 // =====================================================
-function handleFileUpload(num, label) {
-  const input = document.getElementById(`file${num}`);
-  const status = document.getElementById(`status${num}`);
-  const file = input && input.files ? input.files[0] : null;
-
-  if (file) {
-    const type = label || (input && input.dataset && input.dataset.type) || "Required";
-    uploadedFiles[num] = { file, type };
-
-    if (status) {
-      status.innerHTML = `
-        <i class="fa-solid fa-circle-check" style="color:#28a745;"></i>
-        ${escapeHtml(file.name)}
-      `;
-    }
-
-    const uploadBox = input ? input.closest(".upload-controls") : null;
-    if (uploadBox) uploadBox.classList.remove("input-error");
-
-    // Save file name to localStorage for persistence
-    localStorage.setItem(`file-${num}`, file.name);
-
-    updateFileList();
-  }
-}
+// OLD handleFileUpload FUNCTION - REMOVED
+// This function bypassed AI quality checks
+// Use the version at line 1286 instead
+// =====================================================
 
 // =====================================================
 // REMOVE FILE & LOCALSTORAGE ENTRY
@@ -1277,7 +1190,7 @@ window.removeFile = function (fileNumber) {
 // HANDLE FILE UPLOAD WITH AI ANALYSIS & PERSISTENCE
 // =====================================================
 const AI_ANALYZE_ENDPOINT = "http://127.0.0.1:5001/attachments/analyze";
-const AI_ANALYZE_TIMEOUT = 30000; // 30s for faster user experience
+const AI_ANALYZE_TIMEOUT = 60000; // 60s - OCR processing can be slow, especially on CPU
 
 // Debug: Log endpoint configuration
 console.log("[DEBUG] AI_ANALYZE_ENDPOINT configured:", AI_ANALYZE_ENDPOINT);
@@ -1332,23 +1245,104 @@ async function handleFileUpload(num, label) {
 
     const analysis = await analyzeAttachmentWithAI(file, type, base64);
     console.log(`[DEBUG] AI analysis completed:`, analysis);
-    uploadedFiles[num].analysis = analysis;
+    
+    // Reject if analysis failed or is missing
+    if (!analysis) {
+      console.error(`[DEBUG] ANALYSIS IS NULL - REJECTING`);
+      throw new Error("AI analysis failed. Please try uploading the file again.");
+    }
+    
+    // Reject if quality check is missing
+    if (!analysis.quality) {
+      console.error(`[DEBUG] QUALITY IS MISSING - REJECTING`);
+      throw new Error("AI quality check failed. Please try uploading the file again.");
+    }
+    
+    // Debug: Log quality check details
+    console.log(`[DEBUG] Quality check for file ${num}:`, {
+      passed: analysis.quality.passed,
+      is_blurry: analysis.quality.is_blurry,
+      is_cropped: analysis.quality.is_cropped,
+      blur_score: analysis.quality.blur_score,
+      crop_coverage: analysis.quality.crop_coverage,
+      passedType: typeof analysis.quality.passed,
+      passedValue: analysis.quality.passed,
+      fullQuality: analysis.quality
+    });
 
-    if (analysis?.quality && analysis.quality.passed === false) {
+    // CRITICAL QUALITY CHECK - Check flags FIRST before checking passed
+    const isBlurry = analysis.quality.is_blurry === true || analysis.quality.is_blurry === "true";
+    const isCropped = analysis.quality.is_cropped === true || analysis.quality.is_cropped === "true";
+    const passed = analysis.quality.passed;
+    
+    console.log(`[DEBUG] Quality flags: isBlurry=${isBlurry}, isCropped=${isCropped}, passed=${passed} (type: ${typeof passed})`);
+    
+    // FAIL if blurry OR cropped OR passed is false
+    if (isBlurry || isCropped || passed === false || passed === "false") {
+      const blurMsg = isBlurry ? "blurred" : "";
+      const cropMsg = isCropped ? "cropped" : "";
+      const issues = [blurMsg, cropMsg].filter(Boolean).join(" and ");
+      console.error(`[DEBUG] ========== QUALITY CHECK FAILED ==========`);
+      console.error(`[DEBUG] File ${num} REJECTED:`, {
+        passed,
+        isBlurry,
+        isCropped,
+        blur_score: analysis.quality.blur_score,
+        crop_coverage: analysis.quality.crop_coverage,
+        issues
+      });
+      console.error(`[DEBUG] ==========================================`);
+      
+      // Clear uploadedFiles BEFORE throwing
+      uploadedFiles[num] = null;
+      
+      // Clear localStorage BEFORE throwing
+      try {
+        localStorage.removeItem(`file_base64_${num}`);
+        localStorage.removeItem(`file_name_${num}`);
+        localStorage.removeItem(`file-${num}-data`);
+        localStorage.removeItem(`file-${num}`);
+        console.log(`[DEBUG] Cleared localStorage for file ${num}`);
+      } catch (e) {
+        console.warn(`[DEBUG] Failed to clear localStorage:`, e);
+      }
+      
       throw new Error(
-        analysis.quality.warnings?.join(" ") ||
-          "AI detected that this file is cropped or blurred. Please upload a clearer copy."
+        `AI detected that this file is ${issues}. Please upload a clearer, complete copy.`
       );
     }
-
-    if (status) {
-      status.innerHTML = `
-        <i class="fa-solid fa-circle-check" style="color:#28a745;"></i>
-        ${escapeHtml(file.name)}
-        <span class="ai-indicator" title="AI validation passed">AI ✓</span>
-      `;
+    
+    // Also fail if passed is not explicitly true
+    if (passed !== true && passed !== "true") {
+      console.error(`[DEBUG] ========== QUALITY CHECK FAILED ==========`);
+      console.error(`[DEBUG] passed is not true:`, {
+        passed,
+        passedType: typeof passed,
+        isBlurry,
+        isCropped
+      });
+      console.error(`[DEBUG] ==========================================`);
+      
+      uploadedFiles[num] = null;
+      try {
+        localStorage.removeItem(`file_base64_${num}`);
+        localStorage.removeItem(`file_name_${num}`);
+        localStorage.removeItem(`file-${num}-data`);
+        localStorage.removeItem(`file-${num}`);
+      } catch (e) {}
+      
+      throw new Error(
+        "AI quality check returned invalid result. Please try uploading the file again."
+      );
     }
+    
+    console.log(`[DEBUG] ========== QUALITY CHECK PASSED ==========`);
+    console.log(`[DEBUG] File ${num} ACCEPTED`);
+    console.log(`[DEBUG] ==========================================`);
+    
+    uploadedFiles[num].analysis = analysis;
 
+    // IMPORTANT: Only save to localStorage AFTER quality check passes
     // Save metadata for persistence (actual File can't be stored)
     try {
       localStorage.setItem(
@@ -1363,6 +1357,7 @@ async function handleFileUpload(num, label) {
       // Also save base64 and name in old format for backward compatibility and submit
       localStorage.setItem(`file_base64_${num}`, base64);
       localStorage.setItem(`file_name_${num}`, file.name);
+      console.log(`[DEBUG] Saved file ${num} to localStorage after quality check passed`);
     } catch (storageError) {
       // Handle localStorage quota exceeded error
       if (storageError.name === 'QuotaExceededError' || storageError.message.includes('quota') || storageError.message.includes('exceeded')) {
@@ -1372,8 +1367,21 @@ async function handleFileUpload(num, label) {
       throw storageError;
     }
 
-    // Update progress: Processing results
+    // Update progress: Processing results - mark as completed
     updateProgressStep(status, 2, 'completed');
+
+    // Clear loading UI and show success status immediately
+    // Use requestAnimationFrame to ensure DOM update happens smoothly
+    requestAnimationFrame(() => {
+      if (status) {
+        status.innerHTML = `
+          <i class="fa-solid fa-circle-check" style="color:#28a745;"></i>
+          ${escapeHtml(file.name)}
+          <span class="ai-indicator" title="AI validation passed">AI ✓</span>
+        `;
+        console.log(`[DEBUG] Status cleared for file ${num}: ${file.name}`);
+      }
+    });
 
     // Only auto-fill when Grades Form 1 (file #1) is processed
     if (num === 1) {
@@ -1392,6 +1400,18 @@ async function handleFileUpload(num, label) {
     console.error("AI analysis failed:", error);
     uploadedFiles[num] = null;
     if (input) input.value = "";
+    
+    // CRITICAL: Clear localStorage to prevent invalid files from being submitted
+    try {
+      localStorage.removeItem(`file_base64_${num}`);
+      localStorage.removeItem(`file_name_${num}`);
+      localStorage.removeItem(`file-${num}-data`);
+      localStorage.removeItem(`file-${num}`);
+      console.log(`[DEBUG] Cleared localStorage for file ${num}`);
+    } catch (clearError) {
+      console.warn(`[DEBUG] Failed to clear localStorage for file ${num}:`, clearError);
+    }
+    
     if (status) {
       status.innerHTML = `
         <i class="fa-solid fa-circle-xmark" style="color:#dc3545;"></i>
@@ -1404,6 +1424,7 @@ async function handleFileUpload(num, label) {
         "We couldn't validate that attachment. Please upload a clearer copy.",
       "error"
     );
+    updateFileList(); // Update file list to reflect removal
   }
 }
 
@@ -1444,7 +1465,23 @@ async function analyzeAttachmentWithAI(file, documentLabel) {
 
     const result = await response.json();
     console.log(`[DEBUG] API response received:`, result);
+    
+    // Validate that result has required quality field
+    if (!result || typeof result !== 'object') {
+      throw new Error("Invalid response from AI service.");
+    }
+    
+    if (!result.quality || typeof result.quality !== 'object') {
+      throw new Error("AI quality check data is missing from response.");
+    }
+    
     return result;
+  } catch (error) {
+    // Re-throw fetch errors and API errors
+    if (error.name === 'AbortError') {
+      throw new Error("AI analysis timed out. Please try again with a smaller file.");
+    }
+    throw error;
   } finally {
     clearTimeout(timeoutId);
   }

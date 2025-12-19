@@ -180,8 +180,20 @@ class AttachmentAnalyzer:
         self._reader = None
         self._quality_model = None
         self._quality_model_input = None
-        self._blur_threshold = 110.0
+        # Configurable blur detection threshold (can be tuned via environment variables)
+        # Lower values = more sensitive (catches more blur)
+        # Higher values = less sensitive (fewer false positives)
+        # Default: 200.0 (more sensitive than previous 110.0)
+        # You can make it more sensitive by setting EDUC_AI_BLUR_THRESHOLD=300 or higher
+        self._blur_threshold = float(os.getenv("EDUC_AI_BLUR_THRESHOLD", "200.0"))
         self._crop_threshold = 0.975
+        
+        # Configurable crop detection thresholds (can be tuned via environment variables)
+        self._crop_coverage_threshold = float(os.getenv("EDUC_AI_CROP_COVERAGE_THRESHOLD", "0.975"))  # 97.5%
+        self._crop_margin_threshold = float(os.getenv("EDUC_AI_CROP_MARGIN_THRESHOLD", "0.015"))  # 1.5%
+        self._crop_edge_content_threshold = float(os.getenv("EDUC_AI_CROP_EDGE_CONTENT_THRESHOLD", "0.25"))  # 25%
+        self._crop_tight_margin = float(os.getenv("EDUC_AI_CROP_TIGHT_MARGIN", "0.01"))  # 1%
+        self._crop_very_tight_margin = float(os.getenv("EDUC_AI_CROP_VERY_TIGHT_MARGIN", "0.005"))  # 0.5%
         self._max_pdf_pages = int(os.getenv("EDUC_AI_MAX_PDF_PAGES", "2"))  # Process fewer pages for speed
         self._max_long_edge_px = int(os.getenv("EDUC_AI_MAX_LONG_EDGE", "1200"))  # Reduced for faster processing
         
@@ -245,18 +257,159 @@ class AttachmentAnalyzer:
     def _evaluate_quality(self, image: Image.Image) -> QualityReport:
         arr = np.array(image)
         gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+        
+        # Primary blur detection: Laplacian variance
         blur_score = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+        
+        # Secondary blur detection: Sobel edge variance (catches motion blur, out-of-focus)
+        # This helps catch blur that Laplacian might miss
+        sobel_x = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
+        sobel_y = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
+        sobel_magnitude = np.sqrt(sobel_x**2 + sobel_y**2)
+        sobel_var = float(sobel_magnitude.var())
+        
+        # Normalize Sobel variance to Laplacian scale (rough approximation)
+        # Sobel variance is typically 10-100x higher than Laplacian
+        # Using a higher divisor to make Sobel more sensitive to blur
+        normalized_sobel = sobel_var / 15.0  # More sensitive normalization factor
+        combined_blur_score = min(blur_score, normalized_sobel)
 
-        edges = cv2.Canny(gray, 60, 180)
-        coords = cv2.findNonZero(edges)
-        if coords is None:
+        # Enhanced crop detection: Multiple methods to catch partial and full crops
+        img_height, img_width = arr.shape[0], arr.shape[1]
+        
+        # Method 1: Edge-based detection with multiple Canny thresholds
+        canny_results = []
+        for low_thresh, high_thresh in [(50, 150), (60, 180), (70, 210)]:
+            edges = cv2.Canny(gray, low_thresh, high_thresh)
+            coords = cv2.findNonZero(edges)
+            if coords is not None:
+                x, y, w, h = cv2.boundingRect(coords)
+                content_area = w * h
+                total_area = img_width * img_height
+                coverage = content_area / total_area
+                margin_x = min(x, img_width - (x + w)) / img_width if img_width > 0 else 0
+                margin_y = min(y, img_height - (y + h)) / img_height if img_height > 0 else 0
+                canny_results.append({
+                    'coverage': coverage,
+                    'margin_x': margin_x,
+                    'margin_y': margin_y,
+                    'x': x, 'y': y, 'w': w, 'h': h
+                })
+        
+        # Method 2: Check edge regions for content density (detects partial crops)
+        # Analyze 3-5% of image edges for content that might be cut off
+        edge_region_size = max(10, int(min(img_width, img_height) * 0.03))  # 3% of image, min 10px
+        edge_regions = {
+            'top': gray[0:edge_region_size, :] if img_height > edge_region_size else gray,
+            'bottom': gray[-edge_region_size:, :] if img_height > edge_region_size else gray,
+            'left': gray[:, 0:edge_region_size] if img_width > edge_region_size else gray,
+            'right': gray[:, -edge_region_size:] if img_width > edge_region_size else gray
+        }
+        
+        # Calculate content density in each edge region
+        edge_content_scores = {}
+        for region_name, region in edge_regions.items():
+            if region.size > 0:
+                # Count non-white pixels (content) - threshold at 200 to catch light content
+                non_white = np.sum(region < 200)
+                total_pixels = region.size
+                content_density = non_white / total_pixels if total_pixels > 0 else 0
+                edge_content_scores[region_name] = content_density
+        
+        # Check if edges have significant content (might indicate cropping)
+        # If an edge has >25% content density, it likely has content that could be cut off
+        high_edge_content = {k: v for k, v in edge_content_scores.items() if v > 0.25}
+        
+        if not canny_results:
             crop_coverage = 0.0
+            # Even without edges, check if edges have content (partial crop indicator)
+            is_cropped = len(high_edge_content) >= 2  # Multiple edges with content = likely cropped
+            print(f"[Crop Detection] No edges found, edge_content={high_edge_content}, is_cropped={is_cropped}")
         else:
-            x, y, w, h = cv2.boundingRect(coords)
-            crop_coverage = (w * h) / (arr.shape[0] * arr.shape[1])
+            # Use median values for more stable detection
+            coverages = [r['coverage'] for r in canny_results]
+            margins_x = [r['margin_x'] for r in canny_results]
+            margins_y = [r['margin_y'] for r in canny_results]
+            
+            crop_coverage = sorted(coverages)[len(coverages) // 2]  # Median
+            avg_margin_x = sum(margins_x) / len(margins_x)
+            avg_margin_y = sum(margins_y) / len(margins_y)
+            min_margin = min(avg_margin_x, avg_margin_y)
+            
+            # Calculate individual edge margins from first result (most representative)
+            first_result = canny_results[0]
+            left_margin = first_result['x'] / img_width if img_width > 0 else 1.0
+            right_margin = (img_width - (first_result['x'] + first_result['w'])) / img_width if img_width > 0 else 1.0
+            top_margin = first_result['y'] / img_height if img_height > 0 else 1.0
+            bottom_margin = (img_height - (first_result['y'] + first_result['h'])) / img_height if img_height > 0 else 1.0
+            
+            edge_margins = {
+                'left': left_margin,
+                'right': right_margin,
+                'top': top_margin,
+                'bottom': bottom_margin
+            }
+            
+            # Count how many edges are tight (small margins)
+            tight_edges = {k: v for k, v in edge_margins.items() if v < 0.02}  # < 2% margin
+            very_tight_edges = {k: v for k, v in edge_margins.items() if v < 0.01}  # < 1% margin
+            
+            # Mark as cropped if ANY of these conditions are true:
+            # 1. Content coverage very high (configurable) AND margins very small (configurable)
+            # 2. Any edge has extremely small margin (configurable) - content at edge
+            # 3. Coverage high (>90%) AND margins very small (configurable)
+            # 4. Multiple edges are tight (<2% margin) - indicates cropping
+            # 5. Any edge is tight (configurable) AND that edge has high content density - partial crop
+            # 6. Three or more edges have content density above threshold - likely cropped document
+            
+            # BUT: If image is very sharp (high blur_score) and coverage is exactly 1.0,
+            # it might just be a full-page scan with no white borders (normal, not cropped)
+            # So we'll be more lenient in this case - require actual content at edges, not just tight margins
+            is_very_sharp = blur_score > 1000.0  # Very sharp image
+            is_full_coverage = crop_coverage >= 0.999  # Essentially 100% coverage
+            
+            # If sharp and full coverage, require stronger evidence of cropping (content at edges)
+            if is_very_sharp and is_full_coverage:
+                # For sharp full-coverage images, only mark as cropped if:
+                # - Multiple edges have actual content (not just tight margins)
+                # - OR coverage is high AND margins are extremely tight AND there's content at edges
+                is_cropped = (
+                    (len(high_edge_content) >= 3)  # Multiple edges with content = likely cropped
+                    or (min_margin < 0.002 and len(high_edge_content) >= 2)  # Extremely tight + content at edges
+                    or any(edge_margins.get(k, 1.0) < 0.005 and edge_content_scores.get(k, 0) > self._crop_edge_content_threshold 
+                           for k in ['top', 'bottom', 'left', 'right'])  # Very tight edge + content = partial crop
+                )
+            else:
+                # Original logic for other cases
+                is_cropped = (
+                    (crop_coverage > self._crop_coverage_threshold and min_margin < self._crop_margin_threshold)  # High coverage + small margins
+                    or (min_margin < self._crop_very_tight_margin)  # Extremely small margins (content at edges)
+                    or (crop_coverage > 0.90 and min_margin < self._crop_tight_margin)  # Good coverage + very small margins
+                    or (len(tight_edges) >= 2)  # Multiple tight edges (aggressive cropping)
+                    or any(edge_margins.get(k, 1.0) < self._crop_tight_margin and edge_content_scores.get(k, 0) > self._crop_edge_content_threshold 
+                           for k in ['top', 'bottom', 'left', 'right'])  # Tight edge + content = partial crop
+                    or (len(high_edge_content) >= 3)  # Multiple edges with content = likely cropped
+                )
+            
+            # Debug logging
+            print(f"[Crop Detection] coverage={crop_coverage:.4f}, min_margin={min_margin:.4f}, "
+                  f"tight_edges={len(tight_edges)}, very_tight={len(very_tight_edges)}, "
+                  f"edge_content={len(high_edge_content)}, is_cropped={is_cropped}")
 
-        is_blurry = blur_score < self._blur_threshold
-        is_cropped = crop_coverage > self._crop_threshold
+        # Blur detection: Use combined score (Laplacian + normalized Sobel)
+        # Lower variance = more blurry
+        # Mark as blurry if EITHER Laplacian OR normalized Sobel indicates blur
+        is_blurry_laplacian = blur_score < self._blur_threshold
+        is_blurry_sobel = normalized_sobel < self._blur_threshold
+        is_blurry = is_blurry_laplacian or is_blurry_sobel
+        
+        # Use combined score for reporting (but decision uses OR logic)
+        blur_score_for_report = combined_blur_score
+        
+        # Debug logging for blur detection
+        print(f"[Blur Detection] laplacian={blur_score:.2f}, sobel_norm={normalized_sobel:.2f}, "
+              f"combined={blur_score_for_report:.2f}, threshold={self._blur_threshold:.2f}, "
+              f"is_blurry={is_blurry} (laplacian={is_blurry_laplacian}, sobel={is_blurry_sobel})")
 
         if self._quality_model and self._quality_model_input is not None:
             height, width = self._quality_model_input
@@ -270,7 +423,7 @@ class AttachmentAnalyzer:
             except Exception:
                 pass
 
-        return QualityReport(is_blurry=is_blurry, is_cropped=is_cropped, blur_score=blur_score, crop_coverage=crop_coverage)
+        return QualityReport(is_blurry=is_blurry, is_cropped=is_cropped, blur_score=blur_score_for_report, crop_coverage=crop_coverage)
 
     def _aggregate_quality(self, reports: List[QualityReport]) -> Dict[str, float | bool]:
         avg_blur = sum(r.blur_score for r in reports) / len(reports)
@@ -285,10 +438,29 @@ class AttachmentAnalyzer:
             return ""
         chunks: List[str] = []
         threshold = self._ocr_confidence_threshold()
+        # Max dimension for OCR - resize large images to speed up processing
+        MAX_OCR_DIMENSION = self._get_max_ocr_dimension()  # Configurable via EDUC_AI_OCR_MAX_DIMENSION
+        
         for image in images:
             try:
-                results = self._reader.readtext(np.array(image), detail=1, paragraph=False)
-            except Exception:
+                # Resize large images to speed up OCR (maintains aspect ratio)
+                img_array = np.array(image)
+                height, width = img_array.shape[:2]
+                max_dim = max(height, width)
+                
+                if max_dim > MAX_OCR_DIMENSION:
+                    # Calculate scaling factor
+                    scale = MAX_OCR_DIMENSION / max_dim
+                    new_width = int(width * scale)
+                    new_height = int(height * scale)
+                    # Resize using PIL for better quality
+                    resized_image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                    img_array = np.array(resized_image)
+                    print(f"[OCR] Resized image from {width}x{height} to {new_width}x{new_height} for faster OCR")
+                
+                results = self._reader.readtext(img_array, detail=1, paragraph=False)
+            except Exception as e:
+                print(f"[OCR] Error during OCR: {e}")
                 results = []
             filtered: List[str] = []
             for bbox, text, confidence in results:
@@ -303,6 +475,10 @@ class AttachmentAnalyzer:
 
     def _ocr_confidence_threshold(self) -> float:
         return float(os.getenv("EDUC_AI_OCR_CONFIDENCE", "0.3"))  # Lower threshold for faster processing
+    
+    def _get_max_ocr_dimension(self) -> int:
+        """Get maximum dimension for OCR processing (larger = slower but more accurate)"""
+        return int(os.getenv("EDUC_AI_OCR_MAX_DIMENSION", "2000"))  # Default 2000px for balance
 
     # ------------------------------------------------------------- field parse
     def _extract_fields(self, raw_text: str, document_type: Optional[str]) -> Dict[str, object]:
